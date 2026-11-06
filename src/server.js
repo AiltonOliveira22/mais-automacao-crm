@@ -108,6 +108,8 @@
  */import express from 'express';
 import path from 'path';
 // --------------------------------------------------------------------------
+// v13.26.2: (4) SERVIÇO nunca vira "null" na confirmação/funil —
+//       guessService casa por palavra-chave + fallbacks de conversa.
 // v13.26.1: (1) SERVIÇO na agenda — parser local (data/hora) não perde o
 //       serviço: local → LLM → catálogo do painel (guessService). (2) FUNIL
 //       AUTOMÁTICO — agendamento gravado cria/atualiza negócio no Kanban
@@ -183,12 +185,23 @@ function catalogItems(branding) {
 function guessService(text, branding) {
   const t = String(text || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   if (!t) return null;
+  const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   let best = null;
   for (const it of catalogItems(branding)) {
-    const n = it.item.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    if (n.length >= 3 && t.includes(n) && (!best || n.length > best.n.length)) best = { ...it, n };
+    const full = norm(it.item);
+    // v13.26.2: a pessoa quase nunca diz o nome completo do item — casa por
+    // PALAVRA-CHAVE: a primeira palavra significativa do item ("demonstracao",
+    // "implantacao", "sistema", "plano"). Empate = nome mais longo vence.
+    const stop = new Set(['de','da','do','com','para','e','a','o','no','na','em','por','ou','sem']);
+    const keys = full.split(/\s+/).filter(w => w.length >= 4 && !stop.has(w));
+    const hit = full.includes(t) || keys.some(k => t.includes(k));
+    if (hit && (!best || full.length > best.n.length)) best = { ...it, n: full };
   }
-  return best ? { service: best.item, cents: best.cents } : null;
+  if (best) return { service: best.item, cents: best.cents };
+  // v13.26.2: fallback de conversa — verbos de agendar viram servico generico
+  if (/demonstra\w*|mostr\w*|test\w*|conversar|falar/.test(t)) return { service: 'Demonstração guiada', cents: null };
+  if (/agend\w*|marcar|encaix\w*|horario|reserv\w*/.test(t)) return { service: 'Atendimento', cents: null };
+  return null;
 }
 
 /* v13.15 — fallback SEM LLM: regex na ÚLTIMA mensagem da cliente.
@@ -1202,15 +1215,15 @@ async function waWebhook(req, res) {
                     [contact.id]);
                   if (exist.rowCount > 0) {
                     await query(`UPDATE deals SET title = $2, value_cents = COALESCE($3, value_cents), updated_at = now() WHERE id = $1`,
-                      [exist.rows[0].id, appt.service || 'Atendimento', dealPrice]);
+                      [exist.rows[0].id, appt.service || 'Demonstração guiada', dealPrice]);
                     console.log('[funil] negócio atualizado:', appt.service, dealPrice != null ? 'R$ ' + (dealPrice/100) : '');
                   } else {
                     await query(`INSERT INTO deals (contact_id, title, value_cents, probability, stage) VALUES ($1,$2,$3,60,'novo')`,
-                      [contact.id, appt.service || 'Atendimento', dealPrice]);
+                      [contact.id, appt.service || 'Demonstração guiada', dealPrice]);
                     console.log('[funil] negócio criado no Funil:', appt.service, dealPrice != null ? 'R$ ' + (dealPrice/100) : '');
                   }
                 } catch (eF) { console.error('[funil] falhou (não bloqueia agenda):', eF.message); }
-                const conf = `📅 Agendado! ${appt.service ? appt.service + ' — ' : ''}${appt.date.split('-').reverse().join('/')} às ${appt.time} (horário de Aracaju). Te mando um lembrete antes, e qualquer ajuste é só me chamar`;
+                const conf = `📅 Agendado! ${appt.service || 'Demonstração guiada'} — ${appt.date.split('-').reverse().join('/')} às ${appt.time} (horário de Aracaju). Te mando um lembrete antes, e qualquer ajuste é só me chamar`;
                 await query(`INSERT INTO messages (conversation_id, direction, kind, body)
                              VALUES ($1,'out','text',$2)`, [conversation.id, conf]);
                 await query(`UPDATE thread_state SET next_suggestion = NULL WHERE conversation_id = $1`,
