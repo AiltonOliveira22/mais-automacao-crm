@@ -767,15 +767,18 @@ app.get('/api/deals', async (_req, res) => {
   res.json(r.rows);
 });
 app.patch('/api/deals/:id', async (req, res) => {
-  const { stage, probability, status_note } = req.body;
+  // v13.26.3: title entra no patch (conserta card "null" do funil sem novo wipe)
+  const { stage, probability, status_note, title } = req.body;
   const r = await query(
     `UPDATE deals SET
        stage        = COALESCE($2, stage),
        probability  = COALESCE($3, probability),
        status_note  = COALESCE($4, status_note),
+       title        = COALESCE($5, title),
+       value_cents  = COALESCE($6, value_cents),
        updated_at   = now()
      WHERE id = $1 RETURNING *`,
-    [req.params.id, stage || null, probability ?? null, status_note || null]
+    [req.params.id, stage || null, probability ?? null, status_note || null, title || null, req.body.value_cents ?? null]
   );
   res.json(r.rows[0] || {});
 });
@@ -792,7 +795,7 @@ app.post('/api/dev/wipe-test', async (req, res) => {
     const r = await query(`SELECT id, wa_id FROM contacts WHERE wa_id = ANY($1)`, [TEST_NUMS]);
     const ids = r.rows.map(x => x.id);
     if (!ids.length) {
-      await query(`UPDATE appointments SET service = 'Demonstração guiada' WHERE service IS NULL`);
+      await query(`UPDATE appointments SET service = 'Demonstração guiada' WHERE service IS NULL OR service IN ('null','demonstração')`);
       return res.json({ ok: true, apagados: 0, obs: 'nenhum contato de teste encontrado' });
     }
     const cvs = await query(`SELECT id FROM conversations WHERE contact_id = ANY($1)`, [ids]);
@@ -806,7 +809,7 @@ app.post('/api/dev/wipe-test', async (req, res) => {
     }
     await query(`DELETE FROM prospect_leads WHERE phone = ANY($1)`, [TEST_NUMS]);
     await query(`DELETE FROM contacts WHERE id = ANY($1)`, [ids]);
-    const fix = await query(`UPDATE appointments SET service = 'Demonstração guiada' WHERE service IS NULL RETURNING id`);
+    const fix = await query(`UPDATE appointments SET service = 'Demonstração guiada' WHERE service IS NULL OR service IN ('null','demonstração') RETURNING id`);
     console.log('[dev] 🧹 limpeza cirurgica: ' + ids.length + ' contatos de teste apagados; vitrine preservada');
     res.json({ ok: true, apagados: ids.length, servicos_corrigidos: fix.rowCount });
   } catch (e) { res.status(500).json({ error: String(e.message) }); }
@@ -1248,7 +1251,7 @@ async function waWebhook(req, res) {
                     `SELECT id FROM deals WHERE contact_id = $1 AND stage NOT IN ('ganho','perdido') ORDER BY id LIMIT 1`,
                     [contact.id]);
                   if (exist.rowCount > 0) {
-                    await query(`UPDATE deals SET title = $2, value_cents = COALESCE($3, value_cents), updated_at = now() WHERE id = $1`,
+                    await query(`UPDATE deals SET title = COALESCE(NULLIF($2,'null'), title), value_cents = COALESCE($3, value_cents), updated_at = now() WHERE id = $1`,
                       [exist.rows[0].id, appt.service || 'Demonstração guiada', dealPrice]);
                     console.log('[funil] negócio atualizado:', appt.service, dealPrice != null ? 'R$ ' + (dealPrice/100) : '');
                   } else {
