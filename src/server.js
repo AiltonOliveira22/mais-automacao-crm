@@ -108,6 +108,8 @@
  */import express from 'express';
 import path from 'path';
 // --------------------------------------------------------------------------
+// v13.26.3: (5) LIMPEZA CIRURGICA — /api/dev/wipe-test apaga so os
+//       contatos de teste (55119900000xx) e preserva leads reais + vitrine.
 // v13.26.2: (4) SERVIÇO nunca vira "null" na confirmação/funil —
 //       guessService casa por palavra-chave + fallbacks de conversa.
 // v13.26.1: (1) SERVIÇO na agenda — parser local (data/hora) não perde o
@@ -776,6 +778,38 @@ app.patch('/api/deals/:id', async (req, res) => {
     [req.params.id, stage || null, probability ?? null, status_note || null]
   );
   res.json(r.rows[0] || {});
+});
+
+/* ---------------- API: LIMPEZA CIRURGICA (v13.26.3) ----------------
+ * Apaga SOMENTE as conversas de teste da barragem (numeros 55119900000xx)
+ * e preserva leads reais + vitrine. Protegida pelo login do painel.
+ * BONUS: conserta servico NULL dos agendamentos antigos (vitrine limpa). */
+const TEST_NUMS = ['5511990000001','5511990000002','5511990000003','5511990000004',
+  '5511990000005','5511990000007','5511990000009','5511990000010',
+  '5511990000098','5511990000099'];
+app.post('/api/dev/wipe-test', async (req, res) => {
+  try {
+    const r = await query(`SELECT id, wa_id FROM contacts WHERE wa_id = ANY($1)`, [TEST_NUMS]);
+    const ids = r.rows.map(x => x.id);
+    if (!ids.length) {
+      await query(`UPDATE appointments SET service = 'Demonstração guiada' WHERE service IS NULL`);
+      return res.json({ ok: true, apagados: 0, obs: 'nenhum contato de teste encontrado' });
+    }
+    const cvs = await query(`SELECT id FROM conversations WHERE contact_id = ANY($1)`, [ids]);
+    const cids = cvs.rows.map(x => x.id);
+    if (cids.length) {
+      await query(`DELETE FROM messages WHERE conversation_id = ANY($1)`, [cids]);
+      await query(`DELETE FROM thread_state WHERE conversation_id = ANY($1)`, [cids]);
+      await query(`DELETE FROM appointments WHERE conversation_id = ANY($1)`, [cids]);
+      await query(`DELETE FROM activities WHERE contact_id = ANY($1)`, [ids]);
+      await query(`DELETE FROM conversations WHERE id = ANY($1)`, [cids]);
+    }
+    await query(`DELETE FROM prospect_leads WHERE phone = ANY($1)`, [TEST_NUMS]);
+    await query(`DELETE FROM contacts WHERE id = ANY($1)`, [ids]);
+    const fix = await query(`UPDATE appointments SET service = 'Demonstração guiada' WHERE service IS NULL RETURNING id`);
+    console.log('[dev] 🧹 limpeza cirurgica: ' + ids.length + ' contatos de teste apagados; vitrine preservada');
+    res.json({ ok: true, apagados: ids.length, servicos_corrigidos: fix.rowCount });
+  } catch (e) { res.status(500).json({ error: String(e.message) }); }
 });
 
 /* ---------------- API: conversas (inbox) ---------------- */
