@@ -384,9 +384,7 @@ export async function suggestReply(messages, contactContext = {}) {
     : `
 
      SEM VALORES NESTA RESPOSTA: a pessoa não pediu preço/valor/orçamento — NÃO cite número algum; se sentir curiosidade de valor, ofereça: "quer que eu te mande a tabela de valores?".`;
-  const out = await chat(
-    BASE,
-    // v13.27-MATRIZ: agenda REAL (horários livres de hoje/amanhã, enviados pelo server)
+  // v13.27-MATRIZ: agenda REAL (horários livres de hoje/amanhã, enviados pelo server)
   const agendaBlock = contactContext.agenda
     ? `
 
@@ -398,6 +396,7 @@ export async function suggestReply(messages, contactContext = {}) {
      4. NUNCA ofereça horário que já passou e NUNCA marque em dia fechado.`
     : '';
   const out = await chat(
+    BASE,
     `${personaPrompt(contactContext.branding)}${extra}${welcome}${priceBlock}${agendaBlock}
 
      Escreva UMA mensagem de WhatsApp como ${getBusiness(contactContext.branding).attendant} respondendo à última mensagem da pessoa.
